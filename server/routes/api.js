@@ -1,5 +1,8 @@
 const express = require('express');
 const mongoose = require('mongoose');
+const fs = require('fs');
+const path = require('path');
+const natural = require('natural');
 const Mine = require('../models/Mine');
 const Inspection = require('../models/Inspection');
 const Grievance = require('../models/Grievance');
@@ -366,44 +369,80 @@ router.get('/grievances/:id', async (req, res) => {
   }
 });
 
-/**
- * Simple Rule-Based Grievance Auto-Categorizer
- * 
- * NOTE: This is a heuristic/rule-based keyword classifier, not real Machine Learning (ML).
- * It is modularly structured so that this classifier function can later be swapped for
- * a trained model (e.g. TF-IDF + Logistic Regression, fine-tuned BERT/DistilBERT, or an LLM classification endpoint).
- * 
- * Keyword Rules:
- *  - wage / salary / payment → 'Wages'
- *  - unsafe / accident / injury → 'Safety'
- *  - pollution / water / dust → 'Environmental'
- *  - anything else → 'General'
- * 
- * @param {string} text - Grievance description text
- * @returns {string} - Inferred category: 'Wages' | 'Safety' | 'Environmental' | 'General'
- */
-function categorizeGrievance(text = '') {
-  if (!text || typeof text !== 'string') return 'General';
+// Path to serialized Naive Bayes ML classifier
+const CLASSIFIER_PATH = path.join(__dirname, '..', 'ml', 'classifier.json');
+let mlClassifier = null;
 
+/**
+ * Load or restore the Naive Bayes ML classifier from disk using natural.BayesClassifier.restore()
+ */
+function getClassifier() {
+  if (mlClassifier) return mlClassifier;
+
+  if (fs.existsSync(CLASSIFIER_PATH)) {
+    try {
+      const rawData = JSON.parse(fs.readFileSync(CLASSIFIER_PATH, 'utf8'));
+      mlClassifier = natural.BayesClassifier.restore(rawData);
+      console.log('🤖 [ML Classifier] Loaded trained Naive Bayes model from classifier.json');
+      return mlClassifier;
+    } catch (err) {
+      console.warn('⚠️ [ML Classifier] Failed to restore classifier.json, falling back to rule-based classifier:', err.message);
+      return null;
+    }
+  } else {
+    console.warn('⚠️ [ML Classifier] classifier.json does not exist. Falling back to rule-based keyword classifier. Run `npm run train-model` to generate the ML model.');
+    return null;
+  }
+}
+
+/**
+ * Fallback Rule-Based Classifier (Used ONLY if classifier.json does not exist)
+ */
+function ruleBasedCategorize(text = '') {
   const content = text.toLowerCase();
 
-  // Rule 1: Wages, salary, payment issues
+  // Rule 1: Wages & Compensation
   if (/\b(wage|wages|salary|salaries|payment|payments|overtime|allowance|bonus|compensation|dues|remuneration)\b/i.test(content)) {
     return 'Wages';
   }
 
-  // Rule 2: Workplace safety, accidents, injuries, hazards
+  // Rule 2: Workplace Safety & Hazards
   if (/\b(unsafe|accident|accidents|injury|injuries|hazard|hazardous|ppe|danger|dangerous|roof fall|collapse|fire|ventilation)\b/i.test(content)) {
     return 'Safety';
   }
 
-  // Rule 3: Environmental impacts, pollution, water, dust
+  // Rule 3: Environmental Impact
   if (/\b(pollution|water|dust|air|smoke|effluent|runoff|soil|ecology|contamination|spill)\b/i.test(content)) {
     return 'Environmental';
   }
 
-  // Fallback: General
   return 'General';
+}
+
+/**
+ * Grievance Category Prediction
+ * Predicts category using trained Naive Bayes ML classifier (natural package),
+ * with graceful rule-based fallback if classifier.json is not present.
+ * 
+ * @param {string} text - Grievance description text
+ * @returns {string} - Predicted category ('Wages' | 'Safety' | 'Environmental' | 'General')
+ */
+function categorizeGrievance(text = '') {
+  if (!text || typeof text !== 'string') return 'General';
+
+  const classifier = getClassifier();
+  if (classifier) {
+    try {
+      const prediction = classifier.classify(text);
+      if (prediction && ['Wages', 'Safety', 'Environmental', 'General'].includes(prediction)) {
+        return prediction;
+      }
+    } catch (err) {
+      console.warn('⚠️ [ML Classifier] Prediction error, applying fallback:', err.message);
+    }
+  }
+
+  return ruleBasedCategorize(text);
 }
 
 // POST /api/grievances - Create a new grievance (with rule-based auto-categorization)

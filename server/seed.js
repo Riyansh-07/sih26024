@@ -100,14 +100,14 @@ const MINE_SUFFIXES = [
 ];
 
 const GRIEVANCE_SAMPLES = [
-  { category: 'safety', description: 'Defective respirator masks and ear protection provided for drilling crew; replacement needed.' },
-  { category: 'working-conditions', description: 'Inadequate potable drinking water and rest shelter facilities at South Pit excavation site.' },
-  { category: 'compensation', description: 'Delay in monthly hazardous duty and overtime allowance disbursement for shift operators.' },
-  { category: 'environment', description: 'Excessive fugitive coal dust near residential township due to lack of water tanker spraying.' },
-  { category: 'safety', description: 'Poor lighting at the coal handling plant (CHP) loading point causing nighttime hazard.' },
-  { category: 'working-conditions', description: 'Underground ventilation fans malfunctioning intermittently during peak afternoon shifts.' },
-  { category: 'compensation', description: 'Discrepancy in digital biometric attendance logs affecting statutory bonus calculations.' },
-  { category: 'other', description: 'Request for scheduled medical health checkup and spirometry testing for dust-exposed workers.' },
+  { category: 'Safety', description: 'Defective respirator masks and ear protection provided for drilling crew; replacement needed.' },
+  { category: 'General', description: 'Inadequate potable drinking water and rest shelter facilities at South Pit excavation site.' },
+  { category: 'Wages', description: 'Delay in monthly hazardous duty and overtime allowance disbursement for shift operators.' },
+  { category: 'Environmental', description: 'Excessive fugitive coal dust near residential township due to lack of water tanker spraying.' },
+  { category: 'Safety', description: 'Poor lighting at the coal handling plant (CHP) loading point causing nighttime hazard.' },
+  { category: 'General', description: 'Underground ventilation fans malfunctioning intermittently during peak afternoon shifts.' },
+  { category: 'Wages', description: 'Discrepancy in digital biometric attendance logs affecting statutory bonus calculations.' },
+  { category: 'General', description: 'Request for scheduled medical health checkup and spirometry testing for dust-exposed workers.' },
 ];
 
 async function seedDatabase() {

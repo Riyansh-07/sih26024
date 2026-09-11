@@ -15,7 +15,7 @@ const GrievanceSchema = new mongoose.Schema(
     category: {
       type: String,
       enum: {
-        values: ['Wages', 'Safety', 'Environmental', 'General', 'safety', 'compensation', 'environment', 'working-conditions', 'harassment', 'other'],
+        values: ['Wages', 'Safety', 'Environmental', 'General'],
         message: '{VALUE} is not a valid grievance category',
       },
       default: 'General',

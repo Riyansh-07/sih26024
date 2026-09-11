@@ -9,6 +9,7 @@
     "start": "cd server && npm start",
     "build:client": "cd client && npm run build",
     "seed": "cd server && npm run seed",
+    "train-model": "cd server && npm run train-model",
     "install:server": "cd server && npm install",
     "install:client": "cd client && npm install",
     "install:all": "npm install && npm run install:server && npm run install:client"

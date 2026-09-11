@@ -40,6 +40,14 @@ const GrievanceSchema = new mongoose.Schema(
     dateResolved: {
       type: Date,
     },
+    reportedLocation: {
+      latitude: {
+        type: Number,
+      },
+      longitude: {
+        type: Number,
+      },
+    },
   },
   {
     timestamps: true,

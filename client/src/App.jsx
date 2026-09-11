@@ -1,9 +1,27 @@
 import React, { useState, useEffect } from 'react';
+import 'leaflet/dist/leaflet.css';
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import L from 'leaflet';
+import Tesseract from 'tesseract.js';
+
+// Helper for custom Leaflet marker pins matching mine status colors
+const createMinePin = (status) => {
+  const color = status === 'active' ? '#10b981' : status === 'under-maintenance' ? '#f59e0b' : '#f43f5e';
+  const glow = status === 'active' ? 'rgba(16, 185, 129, 0.45)' : status === 'under-maintenance' ? 'rgba(245, 158, 11, 0.45)' : 'rgba(244, 63, 94, 0.45)';
+  return L.divIcon({
+    className: 'custom-mine-pin',
+    html: `<div style="background: ${color}; width: 14px; height: 14px; border-radius: 50%; border: 2px solid #ffffff; box-shadow: 0 0 10px ${glow}; transform: translate(-50%, -50%);"></div>`,
+    iconSize: [14, 14],
+    iconAnchor: [7, 7],
+    popupAnchor: [0, -10],
+  });
+};
+
 
 // ==========================================
 // SKELETON LOADER COMPONENTS
 // ==========================================
-function TableSkeleton({ rows = 4, cols = 6 }) {
+function TableSkeleton({ rows = 4, cols = 7 }) {
   return (
     <div className="table-container">
       <table className="data-table">
@@ -14,6 +32,7 @@ function TableSkeleton({ rows = 4, cols = 6 }) {
             <th>Type</th>
             <th>Operational Status</th>
             <th>Subsidiary</th>
+            <th style={{ textAlign: 'center' }}>Risk Level</th>
             <th style={{ textAlign: 'center' }}>Inspections</th>
           </tr>
         </thead>
@@ -28,6 +47,9 @@ function TableSkeleton({ rows = 4, cols = 6 }) {
               <td><div className="skeleton skeleton-line" style={{ width: '60%' }} /></td>
               <td><div className="skeleton skeleton-line" style={{ width: '75px', height: '22px', borderRadius: 'var(--radius-full)' }} /></td>
               <td><div className="skeleton skeleton-line" style={{ width: '50%' }} /></td>
+              <td style={{ textAlign: 'center' }}>
+                <div className="skeleton skeleton-line" style={{ width: '65px', height: '22px', margin: '0 auto', borderRadius: 'var(--radius-full)' }} />
+              </td>
               <td style={{ textAlign: 'center' }}>
                 <div className="skeleton skeleton-line" style={{ width: '60px', height: '22px', margin: '0 auto', borderRadius: 'var(--radius-full)' }} />
               </td>
@@ -98,6 +120,7 @@ export default function App() {
   const [mines, setMines] = useState([]);
   const [minesLoading, setMinesLoading] = useState(false);
   const [minesNote, setMinesNote] = useState('');
+  const [riskMap, setRiskMap] = useState({});
 
   const [inspections, setInspections] = useState([]);
   const [inspectionsLoading, setInspectionsLoading] = useState(false);
@@ -109,15 +132,26 @@ export default function App() {
   const [grievanceFilterCategory, setGrievanceFilterCategory] = useState('all');
   const [grievanceFilterStatus, setGrievanceFilterStatus] = useState('all');
 
+  // Audit Log State
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [auditLogsLoading, setAuditLogsLoading] = useState(false);
+  const [auditFilterEntity, setAuditFilterEntity] = useState('all');
+  const [auditFilterAction, setAuditFilterAction] = useState('all');
+  const [chainIntegrity, setChainIntegrity] = useState(null);
+  const [expandedLogId, setExpandedLogId] = useState(null);
+
   // Form states
   const [showGrievanceForm, setShowGrievanceForm] = useState(false);
   const [grievanceForm, setGrievanceForm] = useState({
     mineId: '',
     submittedBy: '',
     description: '',
+    reportedLocation: null,
   });
   const [submittingGrievance, setSubmittingGrievance] = useState(false);
   const [grievanceActionMsg, setGrievanceActionMsg] = useState('');
+  const [grievanceLocLoading, setGrievanceLocLoading] = useState(false);
+  const [grievanceLocError, setGrievanceLocError] = useState('');
 
   const [showInspectionForm, setShowInspectionForm] = useState(false);
   const [inspectionForm, setInspectionForm] = useState({
@@ -127,9 +161,18 @@ export default function App() {
     status: 'passed',
     severity: 'minor',
     findings: '',
+    reportedLocation: null,
   });
   const [submittingInspection, setSubmittingInspection] = useState(false);
   const [inspectionActionMsg, setInspectionActionMsg] = useState('');
+  const [inspectionLocLoading, setInspectionLocLoading] = useState(false);
+  const [inspectionLocError, setInspectionLocError] = useState('');
+
+  // OCR state for inspection notes
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState(0);
+  const [ocrStatusText, setOcrStatusText] = useState('');
+  const [ocrError, setOcrError] = useState('');
 
   // Role permissions
   const isAdmin = userRole === 'Admin';
@@ -205,11 +248,51 @@ export default function App() {
     }
   };
 
+  // Fetch risk analysis per mine
+  const fetchRiskAnalysis = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/mines/risk-analysis`);
+      const data = await res.json();
+      if (data.success && data.data) {
+        const mapping = {};
+        data.data.forEach((item) => {
+          mapping[item.mineId] = item;
+        });
+        setRiskMap(mapping);
+      }
+    } catch (err) {
+      console.error('Error fetching risk analysis:', err);
+    }
+  };
+
+  // Fetch cryptographic SHA-256 hash-chained audit logs
+  const fetchAuditLogs = async (entityFilter = auditFilterEntity, actionFilter = auditFilterAction) => {
+    setAuditLogsLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (entityFilter !== 'all') params.append('entityType', entityFilter);
+      if (actionFilter !== 'all') params.append('action', actionFilter);
+
+      const res = await fetch(`${API_BASE_URL}/api/audit-log?${params.toString()}`);
+      const data = await res.json();
+      if (data.success) {
+        setAuditLogs(data.data || []);
+        setChainIntegrity(data.chainIntegrity || null);
+      }
+    } catch (err) {
+      console.error('Error fetching audit logs:', err);
+    } finally {
+      setAuditLogsLoading(false);
+    }
+  };
+
   const refreshAll = () => {
     checkHealth();
     fetchMines();
     fetchInspections();
     fetchGrievances();
+    fetchRiskAnalysis();
+    fetchAuditLogs();
   };
 
   useEffect(() => {
@@ -218,6 +301,89 @@ export default function App() {
 
   const toggleExpandMine = (mineId) => {
     setExpandedMineId((prevId) => (prevId === mineId ? null : mineId));
+  };
+
+  const handleOcrImageUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setOcrLoading(true);
+    setOcrProgress(0);
+    setOcrStatusText('Initializing OCR engine...');
+    setOcrError('');
+
+    try {
+      const result = await Tesseract.recognize(file, 'eng', {
+        logger: (m) => {
+          if (m.status === 'recognizing text') {
+            setOcrStatusText(`Extracting text... ${Math.round((m.progress || 0) * 100)}%`);
+            setOcrProgress(Math.round((m.progress || 0) * 100));
+          } else if (m.status) {
+            setOcrStatusText(`${m.status}...`);
+          }
+        },
+      });
+
+      const extractedText = result?.data?.text?.trim();
+      if (extractedText) {
+        setInspectionForm((prev) => ({
+          ...prev,
+          findings: prev.findings ? `${prev.findings}\n${extractedText}` : extractedText,
+        }));
+        setOcrStatusText('✅ OCR text auto-filled into findings below! (Review and edit before saving)');
+      } else {
+        setOcrError('No legible text detected in the uploaded image.');
+      }
+    } catch (err) {
+      console.error('OCR Error:', err);
+      setOcrError(`OCR extraction failed: ${err.message || 'Unknown error'}`);
+    } finally {
+      setOcrLoading(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleGetLocation = (target) => {
+    if (!navigator.geolocation) {
+      if (target === 'grievance') setGrievanceLocError('Geolocation not supported by this browser');
+      else setInspectionLocError('Geolocation not supported by this browser');
+      return;
+    }
+
+    if (target === 'grievance') {
+      setGrievanceLocLoading(true);
+      setGrievanceLocError('');
+    } else {
+      setInspectionLocLoading(true);
+      setInspectionLocError('');
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const coords = {
+          latitude: parseFloat(position.coords.latitude.toFixed(4)),
+          longitude: parseFloat(position.coords.longitude.toFixed(4)),
+        };
+        if (target === 'grievance') {
+          setGrievanceForm((prev) => ({ ...prev, reportedLocation: coords }));
+          setGrievanceLocLoading(false);
+        } else {
+          setInspectionForm((prev) => ({ ...prev, reportedLocation: coords }));
+          setInspectionLocLoading(false);
+        }
+      },
+      (error) => {
+        const errorMsg = error.code === 1 ? 'Location permission denied' : 'Failed to retrieve GPS location';
+        if (target === 'grievance') {
+          setGrievanceLocError(errorMsg);
+          setGrievanceLocLoading(false);
+        } else {
+          setInspectionLocError(errorMsg);
+          setInspectionLocLoading(false);
+        }
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   };
 
   const handleCreateGrievance = async (e) => {
@@ -240,9 +406,11 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         setGrievanceActionMsg('✅ Grievance filed & auto-categorized!');
-        setGrievanceForm({ mineId: '', submittedBy: '', description: '' });
+        setGrievanceForm({ mineId: '', submittedBy: '', description: '', reportedLocation: null });
         setShowGrievanceForm(false);
         fetchGrievances();
+        fetchRiskAnalysis();
+        fetchAuditLogs();
       } else {
         setGrievanceActionMsg(`⚠️ ${data.message || 'Failed to file grievance'}`);
       }
@@ -281,9 +449,12 @@ export default function App() {
           status: 'passed',
           severity: 'minor',
           findings: '',
+          reportedLocation: null,
         });
         setShowInspectionForm(false);
         fetchInspections();
+        fetchRiskAnalysis();
+        fetchAuditLogs();
       } else {
         setInspectionActionMsg(`⚠️ ${data.message || 'Failed to log inspection'}`);
       }
@@ -311,6 +482,8 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         fetchGrievances();
+        fetchRiskAnalysis();
+        fetchAuditLogs();
       } else {
         alert(data.message || 'Update failed');
       }
@@ -326,6 +499,8 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         fetchGrievances();
+        fetchRiskAnalysis();
+        fetchAuditLogs();
       } else {
         alert(data.message);
       }
@@ -341,6 +516,8 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         fetchInspections();
+        fetchRiskAnalysis();
+        fetchAuditLogs();
       } else {
         alert(data.message);
       }
@@ -358,6 +535,8 @@ export default function App() {
         fetchMines();
         fetchInspections();
         fetchGrievances();
+        fetchRiskAnalysis();
+        fetchAuditLogs();
       } else {
         alert(data.message);
       }
@@ -423,6 +602,32 @@ export default function App() {
         return 'status-offline';
       default:
         return 'status-warning';
+    }
+  };
+
+  const getRiskBadgeClass = (riskLevel) => {
+    switch (riskLevel?.toLowerCase()) {
+      case 'high':
+        return 'status-offline';
+      case 'medium':
+        return 'status-warning';
+      case 'low':
+        return 'status-online';
+      default:
+        return 'status-info';
+    }
+  };
+
+  const getAuditActionClass = (action) => {
+    switch (action?.toUpperCase()) {
+      case 'CREATE':
+        return 'status-online';
+      case 'UPDATE':
+        return 'status-warning';
+      case 'DELETE':
+        return 'status-offline';
+      default:
+        return 'status-info';
     }
   };
 
@@ -611,12 +816,34 @@ export default function App() {
           </div>
 
           <div className="info-row">
+            <span className="info-label">Escalated Inspections</span>
+            <span className="info-value" style={{ color: '#f43f5e', fontWeight: 600 }}>
+              {inspectionsLoading ? (
+                <span className="skeleton skeleton-line" style={{ width: '35px', height: '18px', display: 'inline-block', marginBottom: 0 }} />
+              ) : (
+                inspections.filter((i) => i.isEscalated).length
+              )}
+            </span>
+          </div>
+
+          <div className="info-row">
             <span className="info-label">Worker Grievances</span>
             <span className="info-value" style={{ color: '#fbbf24' }}>
               {grievancesLoading ? (
                 <span className="skeleton skeleton-line" style={{ width: '55px', height: '18px', display: 'inline-block', marginBottom: 0 }} />
               ) : (
                 `${grievances.length} (${grievances.filter((g) => g.status === 'submitted' || g.status === 'in-review').length} pending)`
+              )}
+            </span>
+          </div>
+
+          <div className="info-row">
+            <span className="info-label">Audit Log Blocks</span>
+            <span className="info-value" style={{ color: '#818cf8', fontWeight: 600 }}>
+              {auditLogsLoading ? (
+                <span className="skeleton skeleton-line" style={{ width: '35px', height: '18px', display: 'inline-block', marginBottom: 0 }} />
+              ) : (
+                `${chainIntegrity?.totalVerifiedBlocks || auditLogs.length} verified`
               )}
             </span>
           </div>
@@ -733,6 +960,39 @@ export default function App() {
               />
             </div>
 
+            {/* GPS Geolocation Attachment */}
+            <div className="form-group" style={{ marginBottom: '1.2rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <label className="form-label" style={{ marginBottom: 0 }}>📍 Field GPS Location (Optional)</label>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ padding: '0.3rem 0.75rem', fontSize: '0.78rem' }}
+                  onClick={() => handleGetLocation('grievance')}
+                  disabled={grievanceLocLoading}
+                >
+                  {grievanceLocLoading ? '📡 Capturing GPS...' : grievanceForm.reportedLocation ? '🔄 Update GPS' : '📍 Capture Current Location'}
+                </button>
+              </div>
+              {grievanceForm.reportedLocation && (
+                <div style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: '#34d399', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <span>✅ GPS Attached: {grievanceForm.reportedLocation.latitude}°N, {grievanceForm.reportedLocation.longitude}°E</span>
+                  <button
+                    type="button"
+                    onClick={() => setGrievanceForm(prev => ({ ...prev, reportedLocation: null }))}
+                    style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: '0.75rem', textDecoration: 'underline' }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              )}
+              {grievanceLocError && (
+                <div style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: '#f87171' }}>
+                  ⚠️ {grievanceLocError}
+                </div>
+              )}
+            </div>
+
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.8rem', alignItems: 'center' }}>
               {grievanceActionMsg && (
                 <span style={{ fontSize: '0.85rem', color: '#cbd5e1' }}>{grievanceActionMsg}</span>
@@ -835,15 +1095,124 @@ export default function App() {
               </div>
             </div>
 
+            {/* OCR Photo Upload for Inspection Notes */}
+            <div
+              style={{
+                marginBottom: '1rem',
+                padding: '0.85rem 1rem',
+                background: 'rgba(99, 102, 241, 0.05)',
+                border: '1px dashed rgba(99, 102, 241, 0.3)',
+                borderRadius: 'var(--radius-sm)',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.6rem' }}>
+                <div>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    📷 Upload Photo of Inspection Note (OCR Auto-Fill)
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    Client-side OCR extracts handwritten/printed notes into Findings below.
+                  </div>
+                </div>
+                <div>
+                  <label
+                    className="btn btn-secondary"
+                    style={{
+                      padding: '0.35rem 0.8rem',
+                      fontSize: '0.78rem',
+                      cursor: ocrLoading ? 'not-allowed' : 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.4rem',
+                      margin: 0,
+                    }}
+                  >
+                    <span>{ocrLoading ? '⏳ Processing OCR...' : '📁 Choose Image'}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      style={{ display: 'none' }}
+                      disabled={ocrLoading}
+                      onChange={handleOcrImageUpload}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {ocrLoading && (
+                <div style={{ marginTop: '0.6rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#818cf8', marginBottom: '0.25rem' }}>
+                    <span>{ocrStatusText}</span>
+                    <span>{ocrProgress}%</span>
+                  </div>
+                  <div style={{ height: '4px', width: '100%', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '2px', overflow: 'hidden' }}>
+                    <div
+                      style={{
+                        height: '100%',
+                        width: `${ocrProgress}%`,
+                        background: '#818cf8',
+                        transition: 'width 0.3s ease',
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {!ocrLoading && ocrStatusText && (
+                <div style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: '#34d399' }}>
+                  {ocrStatusText}
+                </div>
+              )}
+
+              {ocrError && (
+                <div style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: '#f87171' }}>
+                  ⚠️ {ocrError}
+                </div>
+              )}
+            </div>
+
             <div className="form-group">
               <label className="form-label">Findings & Observations</label>
               <textarea
                 className="form-textarea"
-                rows={2}
-                placeholder="Key audit findings, DGMS compliance notes, slope monitoring data..."
+                rows={3}
+                placeholder="Key audit findings, DGMS compliance notes, slope monitoring data (or upload photo above to auto-fill)..."
                 value={inspectionForm.findings}
                 onChange={(e) => setInspectionForm({ ...inspectionForm, findings: e.target.value })}
               />
+            </div>
+
+            {/* GPS Geolocation Attachment */}
+            <div className="form-group" style={{ marginBottom: '1.2rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <label className="form-label" style={{ marginBottom: 0 }}>📍 Field GPS Location (Optional)</label>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ padding: '0.3rem 0.75rem', fontSize: '0.78rem' }}
+                  onClick={() => handleGetLocation('inspection')}
+                  disabled={inspectionLocLoading}
+                >
+                  {inspectionLocLoading ? '📡 Capturing GPS...' : inspectionForm.reportedLocation ? '🔄 Update GPS' : '📍 Capture Current Location'}
+                </button>
+              </div>
+              {inspectionForm.reportedLocation && (
+                <div style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: '#34d399', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <span>✅ GPS Attached: {inspectionForm.reportedLocation.latitude}°N, {inspectionForm.reportedLocation.longitude}°E</span>
+                  <button
+                    type="button"
+                    onClick={() => setInspectionForm(prev => ({ ...prev, reportedLocation: null }))}
+                    style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: '0.75rem', textDecoration: 'underline' }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              )}
+              {inspectionLocError && (
+                <div style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: '#f87171' }}>
+                  ⚠️ {inspectionLocError}
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.8rem', alignItems: 'center' }}>
@@ -868,6 +1237,47 @@ export default function App() {
           </form>
         </div>
       )}
+
+      {/* SECTION: Interactive Mine Locations Map */}
+      <div className="card" style={{ marginBottom: '2rem' }}>
+        <div className="card-title">
+          <span>🗺️ Mine Locations Map</span>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+            {mines.filter((m) => (m.location?.latitude || m.latitude) && (m.location?.longitude || m.longitude)).length} mines plotted
+          </span>
+        </div>
+
+        <div className="map-wrapper">
+          <MapContainer center={[22.9734, 83.5]} zoom={5} scrollWheelZoom={false} style={{ height: '100%', width: '100%' }}>
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            />
+            {mines.map((mine) => {
+              const lat = mine.location?.latitude || mine.latitude;
+              const lng = mine.location?.longitude || mine.longitude;
+              if (!lat || !lng) return null;
+              return (
+                <Marker key={mine._id} position={[lat, lng]} icon={createMinePin(mine.operationalStatus)}>
+                  <Popup>
+                    <div style={{ color: '#f8fafc', minWidth: '160px' }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.95rem', marginBottom: '0.2rem' }}>{mine.name}</div>
+                      <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>🏢 Subsidiary: <strong>{mine.subsidiary}</strong></div>
+                      <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>📍 {mine.location?.district}, {mine.location?.state}</div>
+                      <div style={{ marginTop: '0.4rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.75rem', textTransform: 'capitalize', color: '#cbd5e1' }}>{mine.type}</span>
+                        <span className={`status-pill ${getMineStatusClass(mine.operationalStatus)}`}>
+                          {mine.operationalStatus}
+                        </span>
+                      </div>
+                    </div>
+                  </Popup>
+                </Marker>
+              );
+            })}
+          </MapContainer>
+        </div>
+      </div>
 
       {/* SECTION 1: Mines Directory & Inspections */}
       <div className="card" style={{ marginBottom: '2rem' }}>
@@ -894,18 +1304,26 @@ export default function App() {
                   <th>Type</th>
                   <th>Operational Status</th>
                   <th>Subsidiary</th>
+                  <th style={{ textAlign: 'center' }}>Risk Level</th>
                   <th style={{ textAlign: 'center' }}>Inspections</th>
                   {canDelete && <th style={{ textAlign: 'center' }}>Actions</th>}
                 </tr>
               </thead>
               <tbody>
-                {mines.map((mine) => {
+                {[...mines]
+                  .sort((a, b) => {
+                    const scoreA = riskMap[a._id]?.riskScore ?? -1;
+                    const scoreB = riskMap[b._id]?.riskScore ?? -1;
+                    return scoreB - scoreA;
+                  })
+                  .map((mine) => {
                   const isExpanded = expandedMineId === mine._id;
                   const mineInspections = inspections.filter(
                     (insp) =>
                       insp.mineId === mine._id ||
                       (insp.mineId && typeof insp.mineId === 'object' && insp.mineId._id === mine._id)
                   );
+                  const riskInfo = riskMap[mine._id];
 
                   return (
                     <React.Fragment key={mine._id}>
@@ -947,6 +1365,18 @@ export default function App() {
                         </td>
                         <td>{mine.subsidiary || '-'}</td>
                         <td style={{ textAlign: 'center' }}>
+                          {riskInfo ? (
+                            <span
+                              className={`status-pill ${getRiskBadgeClass(riskInfo.riskLevel)}`}
+                              title={`Score: ${riskInfo.riskScore}/100 • 90d Issues: ${riskInfo.factors?.failedOrCriticalInspections90d || 0} • Unresolved Grievances: ${riskInfo.factors?.unresolvedGrievances || 0}`}
+                            >
+                              {riskInfo.riskLevel} ({riskInfo.riskScore})
+                            </span>
+                          ) : (
+                            <span className="status-pill status-info">Low (0)</span>
+                          )}
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
                           <span
                             className="status-pill status-info"
                             style={{
@@ -974,7 +1404,7 @@ export default function App() {
                       {/* Expanded Inspections Subpanel */}
                       {isExpanded && (
                         <tr>
-                          <td colSpan={canDelete ? 7 : 6} style={{ padding: 0 }}>
+                          <td colSpan={canDelete ? 8 : 7} style={{ padding: 0 }}>
                             <div className="inspection-subpanel">
                               <div
                                 style={{
@@ -1033,11 +1463,32 @@ export default function App() {
                                             {insp.findings}
                                           </div>
                                         )}
-                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                                          Date: {insp.date ? new Date(insp.date).toLocaleDateString() : '-'}
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem', display: 'flex', gap: '0.8rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                                          <span>Date: {insp.date ? new Date(insp.date).toLocaleDateString() : '-'}</span>
+                                          {insp.reportedLocation && (
+                                            <span style={{ color: '#38bdf8' }}>
+                                              📍 GPS: {Number(insp.reportedLocation.latitude).toFixed(4)}°N, {Number(insp.reportedLocation.longitude).toFixed(4)}°E
+                                            </span>
+                                          )}
                                         </div>
                                       </div>
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                        {insp.isEscalated && (
+                                          <span
+                                            className="status-pill status-offline"
+                                            style={{
+                                              fontWeight: 700,
+                                              letterSpacing: '0.04em',
+                                              fontSize: '0.7rem',
+                                              background: 'rgba(244, 63, 94, 0.2)',
+                                              color: '#f43f5e',
+                                              borderColor: 'rgba(244, 63, 94, 0.5)',
+                                            }}
+                                            title="Overdue inspection: failed or follow-up required (> 14 days old)"
+                                          >
+                                            ⚠️ ESCALATED
+                                          </span>
+                                        )}
                                         <span className={`status-pill ${getInspectionStatusClass(insp.status)}`}>
                                           {insp.status}
                                         </span>
@@ -1122,8 +1573,8 @@ export default function App() {
         ) : (
           <div style={{ display: 'grid', gap: '0.85rem' }}>
             {filteredGrievances.map((g) => {
-              const mineName = g.mineId?.name || (typeof g.mineId === 'string' ? g.mineId : 'Unknown Mine');
-              const subsidiary = g.mineId?.subsidiary ? ` • ${g.mineId.subsidiary}` : '';
+              const mineName = g.mineId?.name || (mines.find((m) => m._id === g.mineId)?.name) || 'Mine Site';
+              const subsidiary = g.mineId?.subsidiary ? ` (${g.mineId.subsidiary})` : '';
 
               return (
                 <div key={g._id} className="item-card" style={{ alignItems: 'flex-start' }}>
@@ -1154,9 +1605,14 @@ export default function App() {
                       {g.description}
                     </div>
 
-                    <div style={{ display: 'flex', gap: '1rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    <div style={{ display: 'flex', gap: '1rem', fontSize: '0.75rem', color: 'var(--text-muted)', flexWrap: 'wrap', alignItems: 'center' }}>
                       <span>Submitted: {g.dateSubmitted ? new Date(g.dateSubmitted).toLocaleDateString() : '-'}</span>
                       {g.dateResolved && <span>Resolved: {new Date(g.dateResolved).toLocaleDateString()}</span>}
+                      {g.reportedLocation && (
+                        <span style={{ color: '#38bdf8' }}>
+                          📍 GPS: {Number(g.reportedLocation.latitude).toFixed(4)}°N, {Number(g.reportedLocation.longitude).toFixed(4)}°E
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -1197,6 +1653,197 @@ export default function App() {
                         </button>
                       )}
                     </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* SECTION 3: Cryptographic Audit Trail (SHA-256 Hash Chain) */}
+      <div className="card" style={{ marginTop: '2rem' }}>
+        <div className="card-title" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <span>⛓️ Cryptographic Audit Trail</span>
+            <span
+              className="status-pill status-online"
+              style={{
+                fontSize: '0.72rem',
+                padding: '0.15rem 0.55rem',
+                border: '1px solid rgba(16, 185, 129, 0.4)',
+                background: 'rgba(16, 185, 129, 0.15)',
+              }}
+              title={chainIntegrity?.statusMessage || 'Tamper-evident ledger'}
+            >
+              🔒 SHA-256 Chain Verified ({chainIntegrity?.totalVerifiedBlocks || auditLogs.length} blocks)
+            </span>
+          </div>
+
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+            Showing {auditLogs.length} logs
+          </span>
+        </div>
+
+        {/* Filter Controls */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.8rem', marginBottom: '1.2rem', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Entity:</span>
+            <select
+              className="form-select"
+              style={{ padding: '0.35rem 0.7rem', fontSize: '0.8rem', width: 'auto' }}
+              value={auditFilterEntity}
+              onChange={(e) => {
+                setAuditFilterEntity(e.target.value);
+                fetchAuditLogs(e.target.value, auditFilterAction);
+              }}
+            >
+              <option value="all">All Entities</option>
+              <option value="Mine">Mines</option>
+              <option value="Inspection">Inspections</option>
+              <option value="Grievance">Grievances</option>
+            </select>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Action:</span>
+            <select
+              className="form-select"
+              style={{ padding: '0.35rem 0.7rem', fontSize: '0.8rem', width: 'auto' }}
+              value={auditFilterAction}
+              onChange={(e) => {
+                setAuditFilterAction(e.target.value);
+                fetchAuditLogs(auditFilterEntity, e.target.value);
+              }}
+            >
+              <option value="all">All Actions</option>
+              <option value="CREATE">CREATE</option>
+              <option value="UPDATE">UPDATE</option>
+              <option value="DELETE">DELETE</option>
+            </select>
+          </div>
+
+          <button
+            className="btn btn-secondary"
+            style={{ marginLeft: 'auto', padding: '0.3rem 0.7rem', fontSize: '0.75rem' }}
+            onClick={() => fetchAuditLogs()}
+            title="Refresh cryptographic audit log"
+          >
+            Refresh Chain
+          </button>
+        </div>
+
+        {/* Audit Log Timeline */}
+        {auditLogsLoading ? (
+          <ListSkeleton count={4} />
+        ) : auditLogs.length === 0 ? (
+          <div className="empty-state">
+            No audit logs recorded for the selected filter.
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: '0.85rem' }}>
+            {auditLogs.map((log) => {
+              const isExpanded = expandedLogId === log._id;
+              return (
+                <div
+                  key={log._id}
+                  className="item-card"
+                  style={{
+                    borderLeft: `3px solid ${
+                      log.action === 'CREATE' ? '#10b981' : log.action === 'UPDATE' ? '#f59e0b' : '#f43f5e'
+                    }`,
+                    background: 'rgba(15, 23, 42, 0.65)',
+                  }}
+                >
+                  <div style={{ width: '100%' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.4rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <span className={`status-pill ${getAuditActionClass(log.action)}`} style={{ fontWeight: 700, fontSize: '0.72rem' }}>
+                          {log.action}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            padding: '0.15rem 0.5rem',
+                            borderRadius: 'var(--radius-sm)',
+                            background: 'rgba(99, 102, 241, 0.15)',
+                            color: '#818cf8',
+                            border: '1px solid rgba(99, 102, 241, 0.3)',
+                          }}
+                        >
+                          📦 {log.entityType}
+                        </span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          ID: <code style={{ color: '#cbd5e1' }}>{log.entityId}</code>
+                        </span>
+                      </div>
+
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        🕒 {new Date(log.timestamp || log.createdAt).toLocaleString()}
+                      </div>
+                    </div>
+
+                    {/* Hash Chain Details */}
+                    <div
+                      style={{
+                        margin: '0.5rem 0',
+                        padding: '0.55rem 0.75rem',
+                        background: 'rgba(0, 0, 0, 0.35)',
+                        borderRadius: 'var(--radius-sm)',
+                        fontFamily: 'monospace',
+                        fontSize: '0.75rem',
+                        border: '1px solid rgba(255, 255, 255, 0.05)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#94a3b8', wordBreak: 'break-all' }}>
+                        <span style={{ color: '#f59e0b', fontWeight: 600 }}>SHA-256 Hash:</span>
+                        <span style={{ color: '#38bdf8' }}>{log.hash}</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#64748b', wordBreak: 'break-all', marginTop: '0.2rem' }}>
+                        <span style={{ color: '#64748b' }}>🔗 Prev Hash:</span>
+                        <span>{log.previousHash}</span>
+                      </div>
+                    </div>
+
+                    {/* Performed By and Toggle Snapshot */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.4rem' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                        👤 Performed By: <strong>{log.performedBy || 'System User'}</strong>
+                      </span>
+
+                      {log.recordSnapshot && Object.keys(log.recordSnapshot).length > 0 && (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem', borderRadius: 'var(--radius-sm)' }}
+                          onClick={() => setExpandedLogId(isExpanded ? null : log._id)}
+                        >
+                          {isExpanded ? 'Hide Payload Snapshot ▲' : 'View Payload Snapshot ▼'}
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Expandable JSON Snapshot */}
+                    {isExpanded && log.recordSnapshot && (
+                      <div
+                        style={{
+                          marginTop: '0.6rem',
+                          padding: '0.6rem 0.8rem',
+                          background: 'rgba(10, 15, 26, 0.95)',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid rgba(99, 102, 241, 0.25)',
+                          overflowX: 'auto',
+                        }}
+                      >
+                        <div style={{ fontSize: '0.72rem', color: '#818cf8', fontWeight: 600, marginBottom: '0.3rem' }}>
+                          Immutable Snapshot Payload:
+                        </div>
+                        <pre style={{ margin: 0, fontSize: '0.72rem', color: '#cbd5e1', lineHeight: 1.4, fontFamily: 'monospace' }}>
+                          {JSON.stringify(log.recordSnapshot, null, 2)}
+                        </pre>
+                      </div>
+                    )}
                   </div>
                 </div>
               );

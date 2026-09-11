@@ -1,9 +1,11 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
+const crypto = require('crypto');
 const { fakerEN_IN, faker } = require('@faker-js/faker');
 const Mine = require('./models/Mine');
 const Inspection = require('./models/Inspection');
 const Grievance = require('./models/Grievance');
+const AuditLog = require('./models/AuditLog');
 
 const SUBSIDIARIES_DATA = [
   {
@@ -158,10 +160,11 @@ async function seedDatabase() {
     console.log('✅ Connected to MongoDB successfully.');
 
     // Clear existing data
-    console.log('🧹 Clearing existing Mine, Inspection, and Grievance collections...');
+    console.log('🧹 Clearing existing Mine, Inspection, Grievance, and AuditLog collections...');
     await Mine.deleteMany({});
     await Inspection.deleteMany({});
     await Grievance.deleteMany({});
+    await AuditLog.deleteMany({});
     console.log('✅ Collections cleared.');
 
     // Generate 25 realistic Mine documents
@@ -281,8 +284,72 @@ async function seedDatabase() {
     const createdGrievances = await Grievance.insertMany(generatedGrievances);
     console.log(`✅ Successfully seeded ${createdGrievances.length} grievances.`);
 
+    // Generate SHA-256 Hash Chained Audit Logs
+    console.log('⛓️ Generating cryptographic SHA-256 hash-chained AuditLog trail...');
+    let previousHash = '0000000000000000000000000000000000000000000000000000000000000000';
+    const auditLogsToInsert = [];
+
+    // Logs for mines
+    for (const m of createdMines.slice(0, 8)) {
+      const ts = faker.date.past({ years: 1 });
+      const payloadString = JSON.stringify(m);
+      const hash = crypto.createHash('sha256').update(`${ts.toISOString()}|CREATE|Mine|${m._id}|${payloadString}|${previousHash}`).digest('hex');
+      auditLogsToInsert.push({
+        action: 'CREATE',
+        entityType: 'Mine',
+        entityId: m._id.toString(),
+        recordSnapshot: { name: m.name, subsidiary: m.subsidiary, location: m.location, operationalStatus: m.operationalStatus },
+        performedBy: 'System Administrator',
+        previousHash,
+        hash,
+        timestamp: ts,
+      });
+      previousHash = hash;
+    }
+
+    // Logs for inspections
+    for (const insp of createdInspections.slice(0, 8)) {
+      const ts = insp.date || faker.date.recent({ days: 60 });
+      const payloadString = JSON.stringify(insp);
+      const hash = crypto.createHash('sha256').update(`${new Date(ts).toISOString()}|CREATE|Inspection|${insp._id}|${payloadString}|${previousHash}`).digest('hex');
+      auditLogsToInsert.push({
+        action: 'CREATE',
+        entityType: 'Inspection',
+        entityId: insp._id.toString(),
+        recordSnapshot: { inspectorName: insp.inspectorName, type: insp.type, status: insp.status, findings: insp.findings },
+        performedBy: insp.inspectorName || 'DGMS Safety Auditor',
+        previousHash,
+        hash,
+        timestamp: ts,
+      });
+      previousHash = hash;
+    }
+
+    // Logs for grievances
+    for (const g of createdGrievances.slice(0, 6)) {
+      const ts = g.dateSubmitted || faker.date.recent({ days: 30 });
+      const payloadString = JSON.stringify(g);
+      const hash = crypto.createHash('sha256').update(`${new Date(ts).toISOString()}|CREATE|Grievance|${g._id}|${payloadString}|${previousHash}`).digest('hex');
+      auditLogsToInsert.push({
+        action: 'CREATE',
+        entityType: 'Grievance',
+        entityId: g._id.toString(),
+        recordSnapshot: { submittedBy: g.submittedBy, category: g.category, description: g.description, status: g.status },
+        performedBy: g.submittedBy || 'Mine Worker',
+        previousHash,
+        hash,
+        timestamp: ts,
+      });
+      previousHash = hash;
+    }
+
+    for (const logItem of auditLogsToInsert) {
+      await AuditLog.create(logItem);
+    }
+    console.log(`✅ Successfully seeded ${auditLogsToInsert.length} cryptographic audit trail blocks.`);
+
     console.log('\n🎉 Database seeding completed successfully!');
-    console.log(`📊 Summary: ${createdMines.length} Mines | ${createdInspections.length} Inspections | ${createdGrievances.length} Grievances`);
+    console.log(`📊 Summary: ${createdMines.length} Mines | ${createdInspections.length} Inspections | ${createdGrievances.length} Grievances | ${auditLogsToInsert.length} Audit Blocks`);
   } catch (error) {
     console.error('❌ Seeding failed with error:', error);
   } finally {

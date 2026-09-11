@@ -45,6 +45,14 @@ const InspectionSchema = new mongoose.Schema(
         message: '{VALUE} is not a valid severity level',
       },
     },
+    reportedLocation: {
+      latitude: {
+        type: Number,
+      },
+      longitude: {
+        type: Number,
+      },
+    },
   },
   {
     timestamps: true,

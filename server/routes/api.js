@@ -2,12 +2,51 @@ const express = require('express');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const natural = require('natural');
 const Mine = require('../models/Mine');
 const Inspection = require('../models/Inspection');
 const Grievance = require('../models/Grievance');
+const AuditLog = require('../models/AuditLog');
 
 const router = express.Router();
+
+const GENESIS_HASH = '0000000000000000000000000000000000000000000000000000000000000000';
+
+/**
+ * Creates an immutable SHA-256 hash-chained audit log entry
+ */
+async function logAuditEvent({ action, entityType, entityId, recordSnapshot, performedBy = 'Portal User' }) {
+  try {
+    if (mongoose.connection.readyState !== 1) return null;
+
+    // Retrieve most recent audit log in the chain
+    const lastLog = await AuditLog.findOne().sort({ createdAt: -1, _id: -1 });
+    const previousHash = lastLog ? lastLog.hash : GENESIS_HASH;
+    const timestamp = new Date();
+
+    // Serialize payload deterministically for SHA-256 calculation
+    const payloadString = JSON.stringify(recordSnapshot || {});
+    const hashData = `${timestamp.toISOString()}|${action}|${entityType}|${entityId}|${payloadString}|${previousHash}`;
+    const hash = crypto.createHash('sha256').update(hashData).digest('hex');
+
+    const auditEntry = await AuditLog.create({
+      action,
+      entityType,
+      entityId: entityId ? entityId.toString() : '',
+      recordSnapshot,
+      performedBy,
+      previousHash,
+      hash,
+      timestamp,
+    });
+
+    return auditEntry;
+  } catch (err) {
+    console.error('⚠️ [AuditLog Error]:', err.message);
+    return null;
+  }
+}
 
 // GET /api/health - Health check endpoint with DB status
 router.get('/health', (req, res) => {
@@ -63,6 +102,93 @@ router.get('/mines', async (req, res) => {
   }
 });
 
+// GET /api/mines/risk-analysis - Calculates 0-100 risk score per mine based on 90d failed/critical inspections & unresolved grievances
+router.get('/mines/risk-analysis', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        note: 'MongoDB is not connected. Configure MONGO_URI in server/.env to enable persistence.',
+      });
+    }
+
+    const [mines, inspections, grievances] = await Promise.all([
+      Mine.find(),
+      Inspection.find(),
+      Grievance.find(),
+    ]);
+
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+
+    const riskAnalysis = mines.map((mine) => {
+      const mineIdStr = mine._id.toString();
+
+      // Count failed or critical inspections in the last 90 days
+      const failedOrCriticalInspections = inspections.filter((insp) => {
+        const inspMineId = (insp.mineId?._id || insp.mineId)?.toString();
+        if (inspMineId !== mineIdStr) return false;
+
+        const isFailedOrCritical =
+          insp.status === 'failed' || insp.severity === 'critical';
+        const inspDate = new Date(insp.date || insp.createdAt || 0);
+        return isFailedOrCritical && inspDate >= ninetyDaysAgo;
+      });
+
+      // Count unresolved grievances
+      const unresolvedGrievances = grievances.filter((grv) => {
+        const grvMineId = (grv.mineId?._id || grv.mineId)?.toString();
+        if (grvMineId !== mineIdStr) return false;
+        return grv.status !== 'resolved';
+      });
+
+      const failedCount = failedOrCriticalInspections.length;
+      const unresolvedCount = unresolvedGrievances.length;
+
+      // 0-100 composite risk score
+      const rawScore = failedCount * 30 + unresolvedCount * 15;
+      const riskScore = Math.min(100, Math.max(0, rawScore));
+
+      let riskLevel = 'Low';
+      if (riskScore >= 60) {
+        riskLevel = 'High';
+      } else if (riskScore >= 30) {
+        riskLevel = 'Medium';
+      }
+
+      return {
+        mineId: mine._id,
+        name: mine.name,
+        subsidiary: mine.subsidiary,
+        state: mine.location?.state,
+        district: mine.location?.district,
+        operationalStatus: mine.operationalStatus,
+        riskScore,
+        riskLevel,
+        factors: {
+          failedOrCriticalInspections90d: failedCount,
+          unresolvedGrievances: unresolvedCount,
+        },
+      };
+    });
+
+    // Sort descending by riskScore
+    riskAnalysis.sort((a, b) => b.riskScore - a.riskScore);
+
+    res.status(200).json({
+      success: true,
+      count: riskAnalysis.length,
+      data: riskAnalysis,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to calculate risk analysis',
+      error: error.message,
+    });
+  }
+});
+
 // GET /api/mines/:id - Fetch a single mine by ID
 router.get('/mines/:id', async (req, res) => {
   try {
@@ -105,6 +231,15 @@ router.post('/mines', async (req, res) => {
     }
 
     const mine = await Mine.create(req.body);
+
+    await logAuditEvent({
+      action: 'CREATE',
+      entityType: 'Mine',
+      entityId: mine._id,
+      recordSnapshot: mine.toObject ? mine.toObject() : mine,
+      performedBy: req.body.performedBy || 'Admin',
+    });
+
     res.status(201).json({
       success: true,
       data: mine,
@@ -140,6 +275,14 @@ router.put('/mines/:id', async (req, res) => {
       });
     }
 
+    await logAuditEvent({
+      action: 'UPDATE',
+      entityType: 'Mine',
+      entityId: mine._id,
+      recordSnapshot: mine.toObject ? mine.toObject() : mine,
+      performedBy: req.body.performedBy || 'Admin',
+    });
+
     res.status(200).json({
       success: true,
       data: mine,
@@ -171,6 +314,14 @@ router.delete('/mines/:id', async (req, res) => {
       });
     }
 
+    await logAuditEvent({
+      action: 'DELETE',
+      entityType: 'Mine',
+      entityId: req.params.id,
+      recordSnapshot: mine.toObject ? mine.toObject() : mine,
+      performedBy: 'Admin',
+    });
+
     res.status(200).json({
       success: true,
       message: 'Mine deleted successfully',
@@ -184,6 +335,23 @@ router.delete('/mines/:id', async (req, res) => {
     });
   }
 });
+
+// Helper to calculate if an inspection is escalated on-the-fly:
+// Status is 'failed' or 'follow-up-required' AND inspection date is > 14 days old
+const computeEscalation = (inspection) => {
+  const isTargetStatus =
+    inspection.status === 'failed' || inspection.status === 'follow-up-required';
+  const inspDate = new Date(inspection.date || inspection.createdAt || Date.now());
+  const now = new Date();
+  const diffInDays = (now.getTime() - inspDate.getTime()) / (1000 * 60 * 60 * 24);
+  const isEscalated = isTargetStatus && diffInDays > 14;
+
+  const doc = inspection.toObject ? inspection.toObject() : { ...inspection };
+  return {
+    ...doc,
+    isEscalated: Boolean(isEscalated),
+  };
+};
 
 // ==========================================
 // INSPECTION ROUTES (/api/inspections)
@@ -204,10 +372,12 @@ router.get('/inspections', async (req, res) => {
       .populate('mineId', 'name')
       .sort({ createdAt: -1 });
 
+    const dataWithEscalation = inspections.map(computeEscalation);
+
     res.status(200).json({
       success: true,
-      count: inspections.length,
-      data: inspections,
+      count: dataWithEscalation.length,
+      data: dataWithEscalation,
     });
   } catch (error) {
     res.status(500).json({
@@ -238,7 +408,7 @@ router.get('/inspections/:id', async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: inspection,
+      data: computeEscalation(inspection),
     });
   } catch (error) {
     res.status(500).json({
@@ -260,9 +430,19 @@ router.post('/inspections', async (req, res) => {
     }
 
     const inspection = await Inspection.create(req.body);
+    const populated = await Inspection.findById(inspection._id).populate('mineId', 'name');
+
+    await logAuditEvent({
+      action: 'CREATE',
+      entityType: 'Inspection',
+      entityId: inspection._id,
+      recordSnapshot: populated?.toObject ? populated.toObject() : inspection.toObject ? inspection.toObject() : inspection,
+      performedBy: req.body.inspectorName || 'Inspector',
+    });
+
     res.status(201).json({
       success: true,
-      data: inspection,
+      data: computeEscalation(populated || inspection),
     });
   } catch (error) {
     res.status(400).json({
@@ -290,6 +470,14 @@ router.delete('/inspections/:id', async (req, res) => {
         message: 'Inspection not found',
       });
     }
+
+    await logAuditEvent({
+      action: 'DELETE',
+      entityType: 'Inspection',
+      entityId: req.params.id,
+      recordSnapshot: inspection.toObject ? inspection.toObject() : inspection,
+      performedBy: 'Admin',
+    });
 
     res.status(200).json({
       success: true,
@@ -455,7 +643,7 @@ router.post('/grievances', async (req, res) => {
       });
     }
 
-    const { mineId, submittedBy, description, status, dateSubmitted } = req.body;
+    const { mineId, submittedBy, description, status, dateSubmitted, reportedLocation } = req.body;
 
     if (!description || !description.trim()) {
       return res.status(400).json({
@@ -474,6 +662,17 @@ router.post('/grievances', async (req, res) => {
       category: assignedCategory,
       status: status || 'submitted',
       dateSubmitted: dateSubmitted || Date.now(),
+      reportedLocation: reportedLocation || undefined,
+    });
+
+    const populatedGrievance = await Grievance.findById(grievance._id).populate('mineId', 'name location subsidiary');
+
+    await logAuditEvent({
+      action: 'CREATE',
+      entityType: 'Grievance',
+      entityId: grievance._id,
+      recordSnapshot: populatedGrievance?.toObject ? populatedGrievance.toObject() : grievance.toObject ? grievance.toObject() : grievance,
+      performedBy: submittedBy || 'Worker',
     });
 
     res.status(201).json({
@@ -511,6 +710,14 @@ router.put('/grievances/:id', async (req, res) => {
       });
     }
 
+    await logAuditEvent({
+      action: 'UPDATE',
+      entityType: 'Grievance',
+      entityId: grievance._id,
+      recordSnapshot: grievance.toObject ? grievance.toObject() : grievance,
+      performedBy: req.body.performedBy || 'Portal User',
+    });
+
     res.status(200).json({
       success: true,
       data: grievance,
@@ -542,6 +749,14 @@ router.delete('/grievances/:id', async (req, res) => {
       });
     }
 
+    await logAuditEvent({
+      action: 'DELETE',
+      entityType: 'Grievance',
+      entityId: req.params.id,
+      recordSnapshot: grievance.toObject ? grievance.toObject() : grievance,
+      performedBy: 'Admin',
+    });
+
     res.status(200).json({
       success: true,
       message: 'Grievance deleted successfully',
@@ -551,6 +766,71 @@ router.delete('/grievances/:id', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to delete grievance',
+      error: error.message,
+    });
+  }
+});
+
+// ==========================================
+// AUDIT LOG ROUTES (/api/audit-log)
+// ==========================================
+
+// GET /api/audit-log - Fetch audit trail and verify SHA-256 hash chain integrity
+router.get('/audit-log', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        chainIntegrity: { verified: true, message: 'DB not connected' },
+        note: 'MongoDB is not connected.',
+      });
+    }
+
+    const { limit = 100, entityType, action } = req.query;
+    const filter = {};
+    if (entityType && entityType !== 'all') filter.entityType = entityType;
+    if (action && action !== 'all') filter.action = action.toUpperCase();
+
+    // Fetch in chronological order to verify hash chaining
+    const allLogs = await AuditLog.find(filter).sort({ createdAt: 1, _id: 1 });
+
+    // Verify cryptographic hash chain integrity
+    let isChainValid = true;
+    let corruptedIndex = -1;
+
+    for (let i = 0; i < allLogs.length; i++) {
+      const current = allLogs[i];
+      if (i > 0) {
+        const previous = allLogs[i - 1];
+        if (current.previousHash !== previous.hash) {
+          isChainValid = false;
+          corruptedIndex = i;
+          break;
+        }
+      }
+    }
+
+    // Return in reverse chronological order for UI display (newest first)
+    const displayLogs = [...allLogs].reverse().slice(0, parseInt(limit, 10));
+
+    res.status(200).json({
+      success: true,
+      count: displayLogs.length,
+      totalCount: allLogs.length,
+      chainIntegrity: {
+        verified: isChainValid,
+        totalVerifiedBlocks: allLogs.length,
+        statusMessage: isChainValid
+          ? 'Cryptographic SHA-256 hash chain verified: zero tampering detected'
+          : `Hash chain integrity mismatch detected at block #${corruptedIndex}`,
+      },
+      data: displayLogs,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch audit logs',
       error: error.message,
     });
   }

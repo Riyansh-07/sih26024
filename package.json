@@ -1,0 +1,21 @@
+{
+  "name": "sih26024",
+  "version": "1.0.0",
+  "description": "MERN Stack Skeleton for sih26024",
+  "scripts": {
+    "dev": "concurrently -n \"SERVER,CLIENT\" -c \"cyan,magenta\" \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "start": "cd server && npm start",
+    "build:client": "cd client && npm run build",
+    "install:server": "cd server && npm install",
+    "install:client": "cd client && npm install",
+    "install:all": "npm install && npm run install:server && npm run install:client"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "keywords": ["mern", "express", "react", "vite", "mongodb", "atlas"],
+  "author": "",
+  "license": "ISC"
+}

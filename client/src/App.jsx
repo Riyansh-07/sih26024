@@ -5,13 +5,14 @@ export default function App() {
   const [serverLoading, setServerLoading] = useState(true);
   const [serverError, setServerError] = useState(null);
 
-  const [items, setItems] = useState([]);
-  const [itemsLoading, setItemsLoading] = useState(false);
-  const [itemsNote, setItemsNote] = useState('');
+  const [mines, setMines] = useState([]);
+  const [minesLoading, setMinesLoading] = useState(false);
+  const [minesNote, setMinesNote] = useState('');
 
-  const [formData, setFormData] = useState({ title: '', description: '', status: 'pending' });
-  const [submitting, setSubmitting] = useState(false);
-  const [actionMessage, setActionMessage] = useState('');
+  const [inspections, setInspections] = useState([]);
+  const [inspectionsLoading, setInspectionsLoading] = useState(false);
+
+  const [expandedMineId, setExpandedMineId] = useState(null);
 
   // Fetch backend health status
   const checkHealth = async () => {
@@ -30,73 +31,94 @@ export default function App() {
     }
   };
 
-  // Fetch items
-  const fetchItems = async () => {
-    setItemsLoading(true);
+  // Fetch all mines
+  const fetchMines = async () => {
+    setMinesLoading(true);
     try {
-      const res = await fetch('/api/items');
+      const res = await fetch('/api/mines');
       const data = await res.json();
       if (data.success) {
-        setItems(data.data || []);
-        if (data.note) setItemsNote(data.note);
+        setMines(data.data || []);
+        if (data.note) setMinesNote(data.note);
       }
     } catch (err) {
-      console.error('Error fetching items:', err);
+      console.error('Error fetching mines:', err);
     } finally {
-      setItemsLoading(false);
+      setMinesLoading(false);
     }
+  };
+
+  // Fetch all inspections
+  const fetchInspections = async () => {
+    setInspectionsLoading(true);
+    try {
+      const res = await fetch('/api/inspections');
+      const data = await res.json();
+      if (data.success) {
+        setInspections(data.data || []);
+      }
+    } catch (err) {
+      console.error('Error fetching inspections:', err);
+    } finally {
+      setInspectionsLoading(false);
+    }
+  };
+
+  const refreshAll = () => {
+    checkHealth();
+    fetchMines();
+    fetchInspections();
   };
 
   useEffect(() => {
-    checkHealth();
-    fetchItems();
+    refreshAll();
   }, []);
 
-  const handleAddItem = async (e) => {
-    e.preventDefault();
-    if (!formData.title.trim()) return;
-
-    setSubmitting(true);
-    setActionMessage('');
-
-    try {
-      const res = await fetch('/api/items', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        setFormData({ title: '', description: '', status: 'pending' });
-        setActionMessage('✅ Item created successfully!');
-        fetchItems();
-      } else {
-        setActionMessage(`⚠️ ${data.message || 'Failed to create item'}`);
-      }
-    } catch (err) {
-      setActionMessage(`❌ Error: ${err.message}`);
-    } finally {
-      setSubmitting(false);
-      setTimeout(() => setActionMessage(''), 4000);
-    }
-  };
-
-  const handleDeleteItem = async (id) => {
-    try {
-      const res = await fetch(`/api/items/${id}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (data.success) {
-        fetchItems();
-      } else {
-        alert(data.message);
-      }
-    } catch (err) {
-      alert(`Error deleting item: ${err.message}`);
-    }
+  const toggleExpandMine = (mineId) => {
+    setExpandedMineId((prevId) => (prevId === mineId ? null : mineId));
   };
 
   const isDbConnected = healthData?.database?.connected;
+
+  const getMineStatusClass = (status) => {
+    switch (status) {
+      case 'active':
+        return 'status-online';
+      case 'under-maintenance':
+        return 'status-warning';
+      case 'closed':
+        return 'status-offline';
+      default:
+        return 'status-warning';
+    }
+  };
+
+  const getInspectionStatusClass = (status) => {
+    switch (status) {
+      case 'passed':
+        return 'status-online';
+      case 'pending':
+      case 'follow-up-required':
+        return 'status-warning';
+      case 'failed':
+        return 'status-offline';
+      default:
+        return 'status-warning';
+    }
+  };
+
+  const getSeverityClass = (severity) => {
+    switch (severity) {
+      case 'minor':
+        return 'status-online';
+      case 'major':
+        return 'status-warning';
+      case 'critical':
+        return 'status-offline';
+      default:
+        return 'status-warning';
+    }
+  };
 
   return (
     <div className="container">
@@ -104,23 +126,26 @@ export default function App() {
       <header className="header">
         <div className="badge">
           <span className="badge-dot"></span>
-          SIH 2026 • MERN Skeleton
+          SIH 2026 • Coal Mine Safety & Management
         </div>
         <h1 className="title">
-          Express + React <span className="title-highlight">(Vite)</span> + Atlas
+          Mine Inspection & <span className="title-highlight">Operations Dashboard</span>
         </h1>
         <p className="subtitle">
-          Clean, minimal full-stack starter with MongoDB Atlas Mongoose integration and Vite proxy.
+          Real-time tracking of coal mine sites, regulatory compliance, and safety inspections.
         </p>
       </header>
 
-      {/* Status Grid */}
-      <div className="grid-2">
-        {/* Backend & MongoDB Status */}
+      {/* Top Grid: System Status */}
+      <div style={{ marginBottom: '2rem' }}>
         <div className="card">
           <div className="card-title">
             <span>⚡ System Status</span>
-            <button className="btn btn-secondary" style={{ marginLeft: 'auto', padding: '0.3rem 0.7rem', fontSize: '0.75rem' }} onClick={() => { checkHealth(); fetchItems(); }}>
+            <button
+              className="btn btn-secondary"
+              style={{ marginLeft: 'auto', padding: '0.3rem 0.7rem', fontSize: '0.75rem' }}
+              onClick={refreshAll}
+            >
               Refresh
             </button>
           </div>
@@ -160,7 +185,9 @@ export default function App() {
               </div>
               <div className="info-row">
                 <span className="info-label">DB ReadyState</span>
-                <span className="info-value">{healthData.database?.status} ({healthData.database?.readyState})</span>
+                <span className="info-value">
+                  {healthData.database?.status} ({healthData.database?.readyState})
+                </span>
               </div>
             </>
           )}
@@ -174,104 +201,167 @@ export default function App() {
             </div>
           )}
         </div>
-
-        {/* Create Item Sample Form */}
-        <div className="card">
-          <div className="card-title">
-            <span>📝 Sample CRUD Tester</span>
-          </div>
-
-          <form onSubmit={handleAddItem}>
-            <div className="form-group">
-              <label className="form-label">Item Title</label>
-              <input
-                type="text"
-                className="form-input"
-                placeholder="e.g. Implement authentication"
-                value={formData.title}
-                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Description (Optional)</label>
-              <input
-                type="text"
-                className="form-input"
-                placeholder="e.g. Add JWT and bcrypt for user login"
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              />
-            </div>
-
-            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-              <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
-                <select
-                  className="form-select"
-                  value={formData.status}
-                  onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                >
-                  <option value="pending">Pending</option>
-                  <option value="in-progress">In-Progress</option>
-                  <option value="completed">Completed</option>
-                </select>
-              </div>
-
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={submitting || !formData.title.trim()}
-              >
-                {submitting ? 'Saving...' : '+ Add Item'}
-              </button>
-            </div>
-          </form>
-
-          {actionMessage && (
-            <div style={{ marginTop: '0.8rem', fontSize: '0.85rem', color: '#cbd5e1' }}>
-              {actionMessage}
-            </div>
-          )}
-        </div>
       </div>
 
-      {/* Items List Section */}
+      {/* Mines Directory & Inspections Section */}
       <div className="card">
         <div className="card-title">
-          <span>📦 Sample Items Database</span>
+          <span>⛏️ Coal Mines Directory</span>
           <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
-            {items.length} {items.length === 1 ? 'item' : 'items'}
+            {mines.length} {mines.length === 1 ? 'mine' : 'mines'} registered
           </span>
         </div>
 
-        {itemsLoading ? (
-          <div className="empty-state">Loading items from backend...</div>
-        ) : items.length === 0 ? (
+        {minesLoading ? (
+          <div className="empty-state">Loading mines from backend...</div>
+        ) : mines.length === 0 ? (
           <div className="empty-state">
-            {itemsNote || 'No items added yet. Use the form above to add an item.'}
+            {minesNote || 'No mines found. Ensure MongoDB is connected and sample mine records are loaded.'}
           </div>
         ) : (
-          <div>
-            {items.map((item) => (
-              <div key={item._id} className="item-card">
-                <div>
-                  <div className="item-title">{item.title}</div>
-                  {item.description && <div className="item-desc">{item.description}</div>}
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                  <span className={`status-pill ${item.status === 'completed' ? 'status-online' : item.status === 'in-progress' ? 'status-warning' : 'status-offline'}`}>
-                    {item.status}
-                  </span>
-                  <button
-                    className="btn-danger-sm"
-                    onClick={() => handleDeleteItem(item._id)}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-            ))}
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Mine Name</th>
+                  <th>State</th>
+                  <th>Type</th>
+                  <th>Operational Status</th>
+                  <th>Subsidiary</th>
+                  <th style={{ textAlign: 'center' }}>Inspections</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mines.map((mine) => {
+                  const isExpanded = expandedMineId === mine._id;
+                  const mineInspections = inspections.filter(
+                    (insp) =>
+                      insp.mineId === mine._id ||
+                      (insp.mineId && typeof insp.mineId === 'object' && insp.mineId._id === mine._id)
+                  );
+
+                  return (
+                    <React.Fragment key={mine._id}>
+                      <tr
+                        className={`clickable-row ${isExpanded ? 'row-expanded' : ''}`}
+                        onClick={() => toggleExpandMine(mine._id)}
+                        title="Click to view/hide inspections"
+                      >
+                        <td>
+                          <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                            {mine.name}
+                          </div>
+                          {mine.coalGrade && (
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                              Grade: {mine.coalGrade}
+                            </div>
+                          )}
+                        </td>
+                        <td>{mine.location?.state || '-'}</td>
+                        <td style={{ textTransform: 'capitalize' }}>{mine.type || '-'}</td>
+                        <td>
+                          <span className={`status-pill ${getMineStatusClass(mine.operationalStatus)}`}>
+                            {mine.operationalStatus}
+                          </span>
+                        </td>
+                        <td>{mine.subsidiary || '-'}</td>
+                        <td style={{ textAlign: 'center' }}>
+                          <span
+                            className="status-pill status-warning"
+                            style={{
+                              background: isExpanded ? 'rgba(99, 102, 241, 0.25)' : 'rgba(255, 255, 255, 0.06)',
+                              color: isExpanded ? '#818cf8' : 'var(--text-secondary)',
+                              borderColor: isExpanded ? 'rgba(99, 102, 241, 0.4)' : 'var(--border-color)',
+                            }}
+                          >
+                            {mineInspections.length} {mineInspections.length === 1 ? 'audit' : 'audits'} {isExpanded ? '▲' : '▼'}
+                          </span>
+                        </td>
+                      </tr>
+
+                      {/* Expanded Inspections Drawer */}
+                      {isExpanded && (
+                        <tr>
+                          <td colSpan={6} style={{ padding: 0 }}>
+                            <div className="inspection-subpanel">
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                  marginBottom: '1rem',
+                                }}
+                              >
+                                <strong style={{ color: 'var(--text-primary)', fontSize: '0.95rem' }}>
+                                  📋 Inspection History for {mine.name}
+                                </strong>
+                                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                  {mineInspections.length} record(s)
+                                </span>
+                              </div>
+
+                              {inspectionsLoading ? (
+                                <div className="empty-state" style={{ padding: '1rem' }}>
+                                  Loading inspection data...
+                                </div>
+                              ) : mineInspections.length === 0 ? (
+                                <div className="empty-state" style={{ padding: '1.5rem', background: 'rgba(255,255,255,0.02)', borderRadius: 'var(--radius-sm)' }}>
+                                  No inspection records logged for this mine yet.
+                                </div>
+                              ) : (
+                                <div style={{ display: 'grid', gap: '0.75rem' }}>
+                                  {mineInspections.map((insp) => (
+                                    <div key={insp._id} className="item-card" style={{ marginBottom: 0 }}>
+                                      <div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.25rem' }}>
+                                          <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                                            {insp.inspectorName}
+                                          </span>
+                                          <span
+                                            style={{
+                                              fontSize: '0.72rem',
+                                              padding: '0.15rem 0.5rem',
+                                              borderRadius: 'var(--radius-sm)',
+                                              background: 'rgba(255, 255, 255, 0.08)',
+                                              color: 'var(--text-secondary)',
+                                              textTransform: 'capitalize',
+                                            }}
+                                          >
+                                            {insp.type}
+                                          </span>
+                                          {insp.severity && (
+                                            <span className={`status-pill ${getSeverityClass(insp.severity)}`}>
+                                              {insp.severity}
+                                            </span>
+                                          )}
+                                        </div>
+                                        {insp.findings && (
+                                          <div className="item-desc" style={{ marginTop: '0.2rem' }}>
+                                            {insp.findings}
+                                          </div>
+                                        )}
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+                                          Date: {insp.date ? new Date(insp.date).toLocaleDateString() : '-'}
+                                        </div>
+                                      </div>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                        <span className={`status-pill ${getInspectionStatusClass(insp.status)}`}>
+                                          {insp.status}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </div>

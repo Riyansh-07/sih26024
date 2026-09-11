@@ -3,6 +3,7 @@ import 'leaflet/dist/leaflet.css';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import Tesseract from 'tesseract.js';
+import { Analytics } from '@vercel/analytics/react';
 
 // Helper for custom Leaflet marker pins matching mine status colors
 const createMinePin = (status) => {
@@ -412,7 +413,7 @@ export default function App() {
         fetchRiskAnalysis();
         fetchAuditLogs();
       } else {
-        setGrievanceActionMsg(`⚠️ ${data.message || 'Failed to file grievance'}`);
+        setGrievanceActionMsg(`���️ ${data.message || 'Failed to file grievance'}`);
       }
     } catch (err) {
       setGrievanceActionMsg(`❌ Error: ${err.message}`);
@@ -1858,6 +1859,9 @@ export default function App() {
           Repository Structure: <code>/server</code> (Express API) &bull; <code>/client</code> (React Vite) &bull; MongoDB Atlas
         </p>
       </footer>
+      
+      {/* Vercel Web Analytics */}
+      <Analytics />
     </div>
   );
 }

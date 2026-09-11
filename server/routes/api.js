@@ -2,6 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const Mine = require('../models/Mine');
 const Inspection = require('../models/Inspection');
+const Grievance = require('../models/Grievance');
 
 const router = express.Router();
 
@@ -296,6 +297,221 @@ router.delete('/inspections/:id', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to delete inspection',
+      error: error.message,
+    });
+  }
+});
+
+// ==========================================
+// GRIEVANCE ROUTES (/api/grievances)
+// ==========================================
+
+// GET /api/grievances - Fetch all grievances (populate mineId with name, location, subsidiary)
+router.get('/grievances', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        note: 'MongoDB is not connected. Configure MONGO_URI in server/.env to enable persistence.',
+      });
+    }
+
+    const grievances = await Grievance.find()
+      .populate('mineId', 'name location subsidiary')
+      .sort({ dateSubmitted: -1, createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      count: grievances.length,
+      data: grievances,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch grievances',
+      error: error.message,
+    });
+  }
+});
+
+// GET /api/grievances/:id - Fetch a single grievance by ID
+router.get('/grievances/:id', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'MongoDB is not connected',
+      });
+    }
+
+    const grievance = await Grievance.findById(req.params.id).populate('mineId', 'name location subsidiary');
+    if (!grievance) {
+      return res.status(404).json({
+        success: false,
+        message: 'Grievance not found',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: grievance,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch grievance',
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * Simple Rule-Based Grievance Auto-Categorizer
+ * 
+ * NOTE: This is a heuristic/rule-based keyword classifier, not real Machine Learning (ML).
+ * It is modularly structured so that this classifier function can later be swapped for
+ * a trained model (e.g. TF-IDF + Logistic Regression, fine-tuned BERT/DistilBERT, or an LLM classification endpoint).
+ * 
+ * Keyword Rules:
+ *  - wage / salary / payment → 'Wages'
+ *  - unsafe / accident / injury → 'Safety'
+ *  - pollution / water / dust → 'Environmental'
+ *  - anything else → 'General'
+ * 
+ * @param {string} text - Grievance description text
+ * @returns {string} - Inferred category: 'Wages' | 'Safety' | 'Environmental' | 'General'
+ */
+function categorizeGrievance(text = '') {
+  if (!text || typeof text !== 'string') return 'General';
+
+  const content = text.toLowerCase();
+
+  // Rule 1: Wages, salary, payment issues
+  if (/\b(wage|wages|salary|salaries|payment|payments|overtime|allowance|bonus|compensation|dues|remuneration)\b/i.test(content)) {
+    return 'Wages';
+  }
+
+  // Rule 2: Workplace safety, accidents, injuries, hazards
+  if (/\b(unsafe|accident|accidents|injury|injuries|hazard|hazardous|ppe|danger|dangerous|roof fall|collapse|fire|ventilation)\b/i.test(content)) {
+    return 'Safety';
+  }
+
+  // Rule 3: Environmental impacts, pollution, water, dust
+  if (/\b(pollution|water|dust|air|smoke|effluent|runoff|soil|ecology|contamination|spill)\b/i.test(content)) {
+    return 'Environmental';
+  }
+
+  // Fallback: General
+  return 'General';
+}
+
+// POST /api/grievances - Create a new grievance (with rule-based auto-categorization)
+router.post('/grievances', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'MongoDB is not connected. Please set a valid MONGO_URI in server/.env to save grievances.',
+      });
+    }
+
+    const { mineId, submittedBy, description, status, dateSubmitted } = req.body;
+
+    if (!description || !description.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Grievance description is required for submission and categorization.',
+      });
+    }
+
+    // Auto-assign category from description text
+    const assignedCategory = categorizeGrievance(description);
+
+    const grievance = await Grievance.create({
+      mineId,
+      submittedBy,
+      description,
+      category: assignedCategory,
+      status: status || 'submitted',
+      dateSubmitted: dateSubmitted || Date.now(),
+    });
+
+    res.status(201).json({
+      success: true,
+      data: grievance,
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: 'Failed to create grievance',
+      error: error.message,
+    });
+  }
+});
+
+// PUT /api/grievances/:id - Update a grievance by ID
+router.put('/grievances/:id', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'MongoDB is not connected',
+      });
+    }
+
+    const grievance = await Grievance.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+      runValidators: true,
+    }).populate('mineId', 'name location subsidiary');
+
+    if (!grievance) {
+      return res.status(404).json({
+        success: false,
+        message: 'Grievance not found',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: grievance,
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: 'Failed to update grievance',
+      error: error.message,
+    });
+  }
+});
+
+// DELETE /api/grievances/:id - Delete a grievance by ID
+router.delete('/grievances/:id', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'MongoDB is not connected',
+      });
+    }
+
+    const grievance = await Grievance.findByIdAndDelete(req.params.id);
+    if (!grievance) {
+      return res.status(404).json({
+        success: false,
+        message: 'Grievance not found',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Grievance deleted successfully',
+      data: {},
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete grievance',
       error: error.message,
     });
   }

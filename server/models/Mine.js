@@ -16,6 +16,12 @@ const MineSchema = new mongoose.Schema(
         type: String,
         trim: true,
       },
+      latitude: {
+        type: Number,
+      },
+      longitude: {
+        type: Number,
+      },
     },
     type: {
       type: String,

@@ -924,7 +924,21 @@ export default function App() {
                             </div>
                           )}
                         </td>
-                        <td>{mine.location?.state || '-'}</td>
+                        <td>
+                          <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
+                            {mine.location?.state || '-'}
+                          </div>
+                          {mine.location?.district && (
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                              {mine.location.district}
+                            </div>
+                          )}
+                          {(mine.location?.latitude || mine.latitude) && (
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                              📍 {(mine.location?.latitude || mine.latitude).toFixed(2)}°N, {(mine.location?.longitude || mine.longitude).toFixed(2)}°E
+                            </div>
+                          )}
+                        </td>
                         <td style={{ textTransform: 'capitalize' }}>{mine.type || '-'}</td>
                         <td>
                           <span className={`status-pill ${getMineStatusClass(mine.operationalStatus)}`}>

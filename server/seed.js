@@ -110,6 +110,39 @@ const GRIEVANCE_SAMPLES = [
   { category: 'General', description: 'Request for scheduled medical health checkup and spirometry testing for dust-exposed workers.' },
 ];
 
+const DISTRICT_COORDINATES = {
+  // Jharkhand Coalfields (Jharia, Bokaro, Karanpura, Rajmahal)
+  'Dhanbad': { lat: 23.7500, lng: 86.4100 }, // Jharia Coalfield ~23.75°N 86.41°E
+  'Bokaro': { lat: 23.7838, lng: 85.9634 },  // East/West Bokaro Coalfield
+  'Ranchi': { lat: 23.6420, lng: 85.1200 },   // North Karanpura Basin
+  'Ramgarh': { lat: 23.6300, lng: 85.5100 },  // Ramgarh Coalfield
+  'Hazaribagh': { lat: 23.9925, lng: 85.3637 },// South Karanpura Coalfield
+  'Latehar': { lat: 23.7440, lng: 84.8720 },  // Auranga / Amrapali Coalfield
+  // West Bengal Coalfields (Raniganj)
+  'Paschim Bardhaman': { lat: 23.6200, lng: 87.1200 }, // Raniganj Coalfield
+  'Purulia': { lat: 23.3321, lng: 86.3652 },
+  'Birbhum': { lat: 23.8400, lng: 87.6100 },
+  // Chhattisgarh Coalfields (Korba, Mand-Raigarh, Hasdeo-Arand, Chirimiri)
+  'Korba': { lat: 22.3595, lng: 82.6800 },   // Gevra, Kusmunda, Dipka Mega-OCPs
+  'Raigarh': { lat: 21.8974, lng: 83.3950 }, // Mand-Raigarh Coalfield
+  'Surajpur': { lat: 23.1437, lng: 82.8647 },// Bisrampur / Bhatgaon Coalfield
+  'Koriya': { lat: 23.1800, lng: 82.3500 },  // Chirimiri / Sonhat Coalfield
+  'Bilaspur': { lat: 22.0797, lng: 82.1409 },
+  // Odisha Coalfields (Talcher, Ib Valley)
+  'Jharsuguda': { lat: 21.8554, lng: 83.9200 }, // Ib Valley Coalfield
+  'Angul': { lat: 20.9500, lng: 85.2200 },      // Talcher Coalfield
+  'Sundargarh': { lat: 22.1200, lng: 84.0400 }, // Basundhara Coalfield
+  'Sambalpur': { lat: 21.4669, lng: 83.9812 },
+  // Madhya Pradesh Coalfields (Singrauli, Sohagpur, Umaria, Pench-Kanhan)
+  'Singrauli': { lat: 24.1992, lng: 82.6645 }, // Singrauli / Moher Basin
+  'Anuppur': { lat: 23.1000, lng: 81.6900 },   // Jamuna-Kotma Coalfield
+  'Shahdol': { lat: 23.2900, lng: 81.3500 },   // Sohagpur Coalfield
+  // Maharashtra Coalfields (Wardha Valley, Umrer, Kamptee)
+  'Chandrapur': { lat: 19.9500, lng: 79.3000 },// Wardha Valley / Ballarpur
+  'Nagpur': { lat: 21.1458, lng: 79.0882 },    // Kamptee / Umrer Coalfield
+  'Yavatmal': { lat: 20.0600, lng: 78.9500 },  // Wani Coalfield
+};
+
 async function seedDatabase() {
   const mongoUri = process.env.MONGO_URI;
 
@@ -132,7 +165,7 @@ async function seedDatabase() {
     console.log('✅ Collections cleared.');
 
     // Generate 25 realistic Mine documents
-    console.log('⛏️ Generating 25 realistic Mine documents...');
+    console.log('⛏️ Generating 25 realistic Mine documents with geographic coordinates...');
     const generatedMines = [];
     const usedNames = new Set();
 
@@ -156,12 +189,23 @@ async function seedDatabase() {
       const coalGrade = COAL_GRADES[Math.floor(Math.random() * COAL_GRADES.length)];
       const capacityMtpa = parseFloat((Math.random() * 25 + 0.5).toFixed(2));
 
+      // Realistic Geographic Coordinates based on District
+      const baseCoords = DISTRICT_COORDINATES[district] || { lat: 23.7500, lng: 86.4100 };
+      const latJitter = parseFloat(((Math.random() - 0.5) * 0.05).toFixed(4));
+      const lngJitter = parseFloat(((Math.random() - 0.5) * 0.05).toFixed(4));
+      const latitude = parseFloat((baseCoords.lat + latJitter).toFixed(4));
+      const longitude = parseFloat((baseCoords.lng + lngJitter).toFixed(4));
+
       generatedMines.push({
         name: mineName,
         location: {
           state: subInfo.state,
           district: district,
+          latitude: latitude,
+          longitude: longitude,
         },
+        latitude: latitude,
+        longitude: longitude,
         type: type,
         coalGrade: coalGrade,
         capacityMtpa: capacityMtpa,
@@ -171,7 +215,7 @@ async function seedDatabase() {
     }
 
     const createdMines = await Mine.insertMany(generatedMines);
-    console.log(`✅ Successfully seeded ${createdMines.length} mines.`);
+    console.log(`✅ Successfully seeded ${createdMines.length} mines with coordinates.`);
 
     // Generate 2-7 inspections per mine
     console.log('📋 Generating 2-7 inspections per mine...');
